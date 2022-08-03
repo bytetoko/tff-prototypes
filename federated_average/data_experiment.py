@@ -3,6 +3,9 @@
 Based on.
 https://www.tensorflow.org/federated/tutorials/working_with_client_data
 
+The script attempts to compute a federated average of the data local to each TFF worker.
+
+The data on each local worker is just a Tensor containing the length of the URI for the data on that Tensor.
 """
 import collections
 import numpy as np
@@ -35,61 +38,56 @@ def get_global_temperature_average(sensor_readings):
   return tff.federated_mean(
       tff.federated_map(get_local_temperature_average, sensor_readings))
 
-
-def dataset_builder(client_id: str) -> tf.data.Dataset:
-  """This is the function that is invoked on each worker to construct the dataset from the client_id.  
-
-  It must be serializable
-  """
-  # This is 
-  return tf.data.Dataset.from_tensors(float(client_id))
-
-
-def create_backend(client_data):
-  # bind TestDataBackend to client_data. client_data is an instance
-  # of ConcreteClientData which is serializable. So it can be shipped
-  # to the TFF workers. When run on the TF worker it will construct
-  # the dataset for the given client.
-  class TestDataBackend(tff.framework.DataBackend):
+class DataBackendForURI(tff.framework.DataBackend):
     async def materialize(self, data, type_spec):
-      client_id = int(data.uri[-1])
-      client_dataset = client_data.create_tf_dataset_for_client(
-          client_data.client_ids[client_id])
+      """This is the function used to materalize the dataset inside the worker from the URI. 
+      """
+      # We simulate loading from the URI by creating a tensor whose value is the length of the URI.
+      # In practice, the URI would be something like a GCS URI. 
+      # TODO(jeremy): If the coordinator knows the URI of the data on each client (e.g. the GCS path); then it
+      # can pass it to each worker. In practice, the coordinator won't know the exact location; it might know
+      # some key (e.g. the application name) that would be the same for each client but each client would then
+      # map that key to a different location (e.g. GCS path). For example by looking at an environment variable. 
+      # How do you that given this function has to be serializable? What would be the commands to create delayed
+      # evaluation of an environment variable? One solution might be to use tf.data.Dataset to read a file whose
+      # path is the same on each worker. The contents of the file would then be the actual GCS path.
+      client_dataset = tf.data.Dataset.from_tensors(float(len(data.uri)))
       return client_dataset
-  return TestDataBackend
 
-def run():
-  """This runs the federated computation.  
+def run(data_uris=None):
+  """This runs the federated computation.
+
+  Args:
+    data_uris: List of URIs of the data; one for each client.
   """
-  data = client_data.ConcreteClientData(["1",  "12"], dataset_builder)
-  DataBackendClass = create_backend(data)
+  if data_uris is None:
+    data_uris = ["5char", "10charchar"]
 
-  # Plug the DataBackend into the ExecutionContext
+  # Plug the DataBackend into the ExecutionContext  
   def ex_fn(
     device: tf.config.LogicalDevice) -> tff.framework.DataExecutor:
     return tff.framework.DataExecutor(
         tff.framework.EagerTFExecutor(device),
-        data_backend=DataBackendClass())
+        data_backend=DataBackendForURI())
   
   factory = tff.framework.local_executor_factory(leaf_executor_fn=ex_fn)
   ctx = tff.framework.ExecutionContext(executor_fn=factory)
   tff.framework.set_default_context(ctx)
 
-  # Materialize one of the client datasets. This is just a way to get
-  # element spec. Presumably in actualy scenario where we can't materialize the
-  # data from one client we would just specify the element_spec directly
-  example_dataset = data.create_tf_dataset_for_client("1")
+  # Materialize an example client dataset. This is just a way to get
+  # element spec. 
+  example_dataset = tf.data.Dataset.from_tensors(float(1))
   element_spec = example_dataset.element_spec
 
   # Create a handle to the data to be passed to the Federated computations
   dataset_type = tff.types.SequenceType(element_spec)
-
-  data_uris = [f'uri://{i}' for i in range(2)]
+    
   data_handle = tff.framework.CreateDataDescriptor(arg_uris=data_uris, arg_type=dataset_type)
 
+  expected = np.mean([len(u) for u in data_uris])
+
   result = get_global_temperature_average(data_handle)
-  # N.B. 
-  print(f"Actual={result}")
+  print(f"Actual={result}, Expected={expected}")
 
 def main():
   run()
