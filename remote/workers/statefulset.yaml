@@ -23,9 +23,9 @@ spec:
   # N.B. This is an attempt to ensure that when we update the statefulset we will kick the pod
   # even if there is only one pod.
   podManagementPolicy: Parallel
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 10
-  serviceName: box
+  serviceName: worker
   template:
     metadata:
       labels:    
@@ -43,4 +43,4 @@ spec:
             cpu: "4"
             memory: 4Gi
             ephemeral-storage:  10Gi
-      serviceAccountName: dev
+      serviceAccountName: tff
